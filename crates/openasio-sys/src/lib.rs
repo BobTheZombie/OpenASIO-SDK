@@ -75,9 +75,15 @@ pub mod loader {
     impl DriverLib {
         pub unsafe fn load(path:&str)->Result<Self,libloading::Error>{
             let lib = Library::new(path)?;
-            let create: Symbol<openasio_driver_create_fn> = lib.get(b"openasio_driver_create\0")?;
-            let destroy: Symbol<openasio_driver_destroy_fn> = lib.get(b"openasio_driver_destroy\0")?;
-            Ok(Self{lib,create:*create,destroy:*destroy})
+            let create = {
+                let symbol: Symbol<openasio_driver_create_fn> = lib.get(b"openasio_driver_create\0")?;
+                *symbol
+            };
+            let destroy = {
+                let symbol: Symbol<openasio_driver_destroy_fn> = lib.get(b"openasio_driver_destroy\0")?;
+                *symbol
+            };
+            Ok(Self{lib,create,destroy})
         }
     }
 }
