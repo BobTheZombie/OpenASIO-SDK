@@ -29,6 +29,16 @@ struct Driver { vt: sys::oa_driver_vtable, state: DriverState }
 #[derive(Copy, Clone)]
 struct DriverPtr(*mut Driver);
 
+impl DriverPtr {
+    #[inline]
+    unsafe fn with<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(&mut Driver) -> R,
+    {
+        f(&mut *self.0)
+    }
+}
+
 // SAFETY: The Driver allocation lives for the duration of any active streams and
 // all access is synchronized manually inside the audio callbacks.
 unsafe impl Send for DriverPtr {}
@@ -117,14 +127,18 @@ unsafe extern "C" fn start(selfp:*mut sys::oa_driver, cfg:*const sys::oa_stream_
                 sc.buffer_size = cpal::BufferSize::Default;
                 let state_ptr = DriverPtr(selfp as *mut Driver);
                 let istream = id.build_input_stream(&sc,
-                    move |data:&[f32], _| {
-                        let st = unsafe{ &mut *state_ptr.0 };
-                        // store latest
-                        let frames = data.len() / (st.state.cfg.in_channels as usize).max(1);
-                        let len = frames * (st.state.cfg.in_channels as usize).max(1);
-                        if st.state.in_buf.len() < len { st.state.in_buf.resize(len, 0.0); }
-                        st.state.in_buf[..len].copy_from_slice(&data[..len]);
-                        st.state.in_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let state_ptr = state_ptr;
+                        move |data:&[f32], _| unsafe {
+                            state_ptr.with(|st| {
+                                // store latest
+                                let frames = data.len() / (st.state.cfg.in_channels as usize).max(1);
+                                let len = frames * (st.state.cfg.in_channels as usize).max(1);
+                                if st.state.in_buf.len() < len { st.state.in_buf.resize(len, 0.0); }
+                                st.state.in_buf[..len].copy_from_slice(&data[..len]);
+                                st.state.in_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            });
+                        }
                     },
                     move |err| { eprintln!("openasio-cpal input error: {err}"); },
                     None
@@ -144,68 +158,90 @@ unsafe extern "C" fn start(selfp:*mut sys::oa_driver, cfg:*const sys::oa_stream_
     let state_ptr = DriverPtr(selfp as *mut Driver);
 
     let ostream = out_dev.build_output_stream(&sc,
-        move |data:&mut [f32], _| {
-            let st = unsafe{ &mut *state_ptr.0 };
-            let frames = (data.len() / (st.state.cfg.out_channels as usize).max(1)) as u32;
+        {
+            let state_ptr = state_ptr;
+            move |data:&mut [f32], _| unsafe {
+                state_ptr.with(|st| {
+                    let out_ch = (st.state.cfg.out_channels as usize).max(1);
+                    let frames = (data.len() / out_ch) as u32;
 
-            // Prepare input pointers based on layout
-            let in_ptr: *const c_void;
-            let mut in_planes: Vec<*const f32> = Vec::new();
-            if matches!(st.state.cfg.layout, sys::oa_buffer_layout::OA_BUF_INTERLEAVED) {
-                in_ptr = if st.state.cfg.in_channels > 0 { st.state.in_buf.as_ptr() as *const c_void } else { std::ptr::null() };
-            } else {
-                if st.state.cfg.in_channels == 0 {
-                    in_ptr = std::ptr::null();
-                } else {
-                    let ch = st.state.cfg.in_channels as usize;
-                    in_planes.resize(ch, std::ptr::null());
-                    for c in 0..ch {
-                        // deinterleave view: plane c points to first sample of that channel
-                        // We'll assume host reads strided by ch; for strict non-interleaved we'd keep true planes.
-                        in_planes[c] = unsafe { st.state.in_buf.as_ptr().add(c) };
-                    }
-                    in_ptr = in_planes.as_ptr() as *const c_void;
-                }
-            }
-
-            // Prepare output pointer(s)
-            let out_ptr: *mut c_void;
-            if matches!(st.state.cfg.layout, sys::oa_buffer_layout::OA_BUF_INTERLEAVED) {
-                out_ptr = data.as_mut_ptr() as *mut c_void;
-            } else {
-                // Non-interleaved: provide channel planes pointing into a staging area.
-                // For simplicity, we reuse data buffer then interleave after callback.
-                // Allocate temp planes pointing to scratch vector.
-                static mut SCRATCH: Vec<f32> = Vec::new();
-                let ch = st.state.cfg.out_channels as usize;
-                let needed = (frames as usize) * ch;
-                unsafe {
-                    if SCRATCH.len() < needed { SCRATCH.resize(needed, 0.0); }
-                    let mut planes: Vec<*mut f32> = Vec::with_capacity(ch);
-                    for c in 0..ch {
-                        planes.push(SCRATCH.as_mut_ptr().add(c * frames as usize));
-                    }
-                    out_ptr = planes.as_mut_ptr() as *mut c_void;
-                    // planes will be valid during this callback; we'll interleave after host returns
-                    // Call host
-                    if let Some(cb)=st.state.host.process {
-                        let ti = sys::oa_time_info{ host_time_ns: st.state.time0.elapsed().as_nanos() as u64, device_time_ns: 0, underruns: st.state.underruns.load(Ordering::Relaxed), overruns: st.state.overruns.load(Ordering::Relaxed)};
-                        let _keep = cb(st.state.host_user, in_ptr, out_ptr, frames, &ti as *const _, &st.state.cfg as *const _);
-                    }
-                    // Interleave planes -> data
-                    for f in 0..(frames as usize) {
+                    // Prepare input pointers based on layout
+                    let mut in_planes: Vec<*const f32> = Vec::new();
+                    let in_ptr: *const c_void = if matches!(st.state.cfg.layout, sys::oa_buffer_layout::OA_BUF_INTERLEAVED) {
+                        if st.state.cfg.in_channels > 0 {
+                            st.state.in_buf.as_ptr() as *const c_void
+                        } else {
+                            std::ptr::null()
+                        }
+                    } else if st.state.cfg.in_channels == 0 {
+                        std::ptr::null()
+                    } else {
+                        let ch = st.state.cfg.in_channels as usize;
+                        in_planes.resize(ch, std::ptr::null());
                         for c in 0..ch {
-                            data[f*ch + c] = *SCRATCH.as_ptr().add(c * frames as usize + f);
+                            // deinterleave view: plane c points to first sample of that channel
+                            // We'll assume host reads strided by ch; for strict non-interleaved we'd keep true planes.
+                            in_planes[c] = unsafe { st.state.in_buf.as_ptr().add(c) };
+                        }
+                        in_planes.as_ptr() as *const c_void
+                    };
+
+                    if matches!(st.state.cfg.layout, sys::oa_buffer_layout::OA_BUF_INTERLEAVED) {
+                        if let Some(cb) = st.state.host.process {
+                            let ti = sys::oa_time_info {
+                                host_time_ns: st.state.time0.elapsed().as_nanos() as u64,
+                                device_time_ns: 0,
+                                underruns: st.state.underruns.load(Ordering::Relaxed),
+                                overruns: st.state.overruns.load(Ordering::Relaxed),
+                            };
+                            let _keep = cb(
+                                st.state.host_user,
+                                in_ptr,
+                                data.as_mut_ptr() as *mut c_void,
+                                frames,
+                                &ti as *const _,
+                                &st.state.cfg as *const _,
+                            );
+                        }
+                    } else {
+                        // Non-interleaved: provide channel planes pointing into a staging area.
+                        // For simplicity, we reuse a scratch buffer then interleave after callback.
+                        static mut SCRATCH: Vec<f32> = Vec::new();
+                        let ch = st.state.cfg.out_channels as usize;
+                        let frames_usize = frames as usize;
+                        let needed = frames_usize * ch;
+                        unsafe {
+                            if SCRATCH.len() < needed {
+                                SCRATCH.resize(needed, 0.0);
+                            }
+                            let mut planes: Vec<*mut f32> = Vec::with_capacity(ch);
+                            for c in 0..ch {
+                                planes.push(SCRATCH.as_mut_ptr().add(c * frames_usize));
+                            }
+                            if let Some(cb) = st.state.host.process {
+                                let ti = sys::oa_time_info {
+                                    host_time_ns: st.state.time0.elapsed().as_nanos() as u64,
+                                    device_time_ns: 0,
+                                    underruns: st.state.underruns.load(Ordering::Relaxed),
+                                    overruns: st.state.overruns.load(Ordering::Relaxed),
+                                };
+                                let _keep = cb(
+                                    st.state.host_user,
+                                    in_ptr,
+                                    planes.as_mut_ptr() as *mut c_void,
+                                    frames,
+                                    &ti as *const _,
+                                    &st.state.cfg as *const _,
+                                );
+                            }
+                            for f in 0..frames_usize {
+                                for c in 0..ch {
+                                    data[f * ch + c] = *SCRATCH.as_ptr().add(c * frames_usize + f);
+                                }
+                            }
                         }
                     }
-                    return;
-                }
-            }
-
-            // Interleaved path: call host directly
-            if let Some(cb)=st.state.host.process {
-                let ti = sys::oa_time_info{ host_time_ns: st.state.time0.elapsed().as_nanos() as u64, device_time_ns: 0, underruns: st.state.underruns.load(Ordering::Relaxed), overruns: st.state.overruns.load(Ordering::Relaxed)};
-                let _keep = cb(st.state.host_user, in_ptr, out_ptr, frames, &ti as *const _, &st.state.cfg as *const _);
+                });
             }
         },
         move |err| { eprintln!("openasio-cpal output error: {err}"); }, None
