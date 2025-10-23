@@ -1,12 +1,9 @@
-//! Safe host-side wrapper for OpenASIO v0.2.0
+//! Safe host-side wrapper for OpenASIO v1.0.0
 use anyhow::{anyhow, Context, Result};
 use openasio_sys as sys;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
 use std::ptr::NonNull;
-
-#[derive(Clone, Copy, Debug)]
-pub enum BufferLayout { Interleaved, NonInterleaved }
 
 #[derive(Clone, Copy, Debug)]
 pub struct StreamConfig {
@@ -115,11 +112,7 @@ impl Driver {
             })
         }
     }
-    pub fn start(&mut self) -> Result<()> {
-        unsafe { let vt = &*(*self.drv.as_ptr()).vt; (vt.start.unwrap())(self.drv.as_ptr(), &(*self._host_thunk).cfg as *const _); Ok(()) }
-    }
+    pub fn start(&mut self) -> Result<()> { unsafe { let vt = &*(*self.drv.as_ptr()).vt; (vt.start.unwrap())(self.drv.as_ptr(), &(*self._host_thunk).cfg as *const _); Ok(()) } }
     pub fn stop(&mut self) { unsafe { let vt = &*(*self.drv.as_ptr()).vt; let _=(vt.stop.unwrap())(self.drv.as_ptr()); } }
 }
-impl Drop for Driver {
-    fn drop(&mut self) { unsafe { let vt = &*(*self.drv.as_ptr()).vt; let _=(vt.close_device.unwrap())(self.drv.as_ptr()); } }
-}
+impl Drop for Driver { fn drop(&mut self) { unsafe { let vt=&*(*self.drv.as_ptr()).vt; let _=(vt.close_device.unwrap())(self.drv.as_ptr()); } } }

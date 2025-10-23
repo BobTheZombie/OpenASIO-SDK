@@ -1,9 +1,9 @@
-//! Raw FFI for OpenASIO v0.2.0
+//! Raw FFI for OpenASIO v1.0.0
 #![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 use std::os::raw::{c_char, c_int, c_void};
 
-pub const OA_VERSION_MAJOR: u32 = 0;
-pub const OA_VERSION_MINOR: u32 = 2;
+pub const OA_VERSION_MAJOR: u32 = 1;
+pub const OA_VERSION_MINOR: u32 = 0;
 pub const OA_VERSION_PATCH: u32 = 0;
 
 pub type oa_bool = i32;
@@ -20,7 +20,7 @@ pub const OA_ERR_BACKEND: oa_result = -5;
 pub const OA_ERR_STATE: oa_result = -6;
 
 #[repr(C)] #[derive(Clone, Copy, Debug)]
-pub enum oa_sample_format { OA_SAMPLE_F32 = 1, OA_SAMPLE_I16 = 2, OA_SAMPLE_U16 = 3 }
+pub enum oa_sample_format { OA_SAMPLE_F32 = 1, OA_SAMPLE_I16 = 2 }
 
 #[repr(C)] #[derive(Clone, Copy, Debug)]
 pub enum oa_buffer_layout { OA_BUF_INTERLEAVED = 1, OA_BUF_NONINTERLEAVED = 2 }

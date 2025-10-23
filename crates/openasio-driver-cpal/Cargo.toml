@@ -1,9 +1,9 @@
 [package]
 name = "openasio-driver-cpal"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "OpenASIO driver implemented over CPAL (Linux/ALSA/JACK)"
+description = "OpenASIO driver implemented over CPAL (Linux/ALSA/JACK) with full-duplex"
 
 [lib]
 crate-type = ["cdylib"]

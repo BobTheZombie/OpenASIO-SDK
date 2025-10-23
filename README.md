@@ -1,1 +1,1 @@
-# OpenASIO v0.2.0 workspace
+# OpenASIO v1.0.0 workspace

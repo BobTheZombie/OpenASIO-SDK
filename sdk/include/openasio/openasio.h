@@ -1,19 +1,19 @@
 /*
  OpenASIO: permissive, ASIO-like realtime audio driver ABI.
- Version: 0.2.0 (draft) — NOT affiliated with Steinberg ASIO®.
+ Version: 1.0.0 — NOT affiliated with Steinberg ASIO®.
  License: MIT OR Apache-2.0
 */
 #ifndef OPENASIO_H
 #define OPENASIO_H
 #ifdef __cplusplus
-extern "C" { 
+extern "C" {
 #endif
 
 #include <stdint.h>
 #include <stddef.h>
 
-#define OA_VERSION_MAJOR 0
-#define OA_VERSION_MINOR 2
+#define OA_VERSION_MAJOR 1
+#define OA_VERSION_MINOR 0
 #define OA_VERSION_PATCH 0
 
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -30,33 +30,32 @@ typedef int32_t oa_bool;
 enum { OA_FALSE = 0, OA_TRUE = 1 };
 
 typedef enum {
-  OA_OK             =  0,
-  OA_ERR_GENERIC    = -1,
-  OA_ERR_UNSUPPORTED= -2,
-  OA_ERR_INVALID_ARG= -3,
-  OA_ERR_DEVICE     = -4,
-  OA_ERR_BACKEND    = -5,
-  OA_ERR_STATE      = -6,
+  OA_OK              =  0,
+  OA_ERR_GENERIC     = -1,
+  OA_ERR_UNSUPPORTED = -2,
+  OA_ERR_INVALID_ARG = -3,
+  OA_ERR_DEVICE      = -4,
+  OA_ERR_BACKEND     = -5,
+  OA_ERR_STATE       = -6,
 } oa_result;
 
 typedef enum {
   OA_SAMPLE_F32 = 1,   // native float32 [-1,+1]
   OA_SAMPLE_I16 = 2,
-  OA_SAMPLE_U16 = 3,
 } oa_sample_format;
 
 typedef enum {
-  OA_BUF_INTERLEAVED   = 1, // frames*channels
-  OA_BUF_NONINTERLEAVED= 2, // array of channel pointers
+  OA_BUF_INTERLEAVED    = 1, // frames*channels
+  OA_BUF_NONINTERLEAVED = 2, // array of channel pointers
 } oa_buffer_layout;
 
 // Capability bitfield (bitwise OR)
 typedef enum {
-  OA_CAP_OUTPUT        = 1<<0,
-  OA_CAP_INPUT         = 1<<1,
-  OA_CAP_FULL_DUPLEX   = 1<<2,
-  OA_CAP_SET_SAMPLERATE= 1<<3,
-  OA_CAP_SET_BUFFRAMES = 1<<4,
+  OA_CAP_OUTPUT         = 1<<0,
+  OA_CAP_INPUT          = 1<<1,
+  OA_CAP_FULL_DUPLEX    = 1<<2,
+  OA_CAP_SET_SAMPLERATE = 1<<3,
+  OA_CAP_SET_BUFFRAMES  = 1<<4,
 } oa_caps;
 
 typedef struct {
