@@ -1,0 +1,18 @@
+[package]
+name = "openasio-driver-alsa17h"
+version = "1.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "OpenASIO driver for AMD Family 17h HDA-class ALSA controllers (full-duplex)"
+categories = ["audio", "ffi"]
+keywords = ["audio", "alsa", "hda", "openasio"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+openasio-sys = { path = "../openasio-sys" }
+alsa = "0.9"
+libc = "0.2"
+nix = { version = "0.29", default-features = false, features = ["poll"] }
+
