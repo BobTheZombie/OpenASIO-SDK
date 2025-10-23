@@ -2,7 +2,8 @@
 members = [
     "crates/openasio-sys",
     "crates/openasio",
-    "crates/openasio-driver-cpal",
+    "crates/openasio-driver-cpal"
+    "crates/openasio-driver-alsa17h",
 ]
 resolver = "2"
 
