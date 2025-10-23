@@ -26,6 +26,14 @@ struct DriverState {
 #[repr(C)]
 struct Driver { vt: sys::oa_driver_vtable, state: DriverState }
 
+#[derive(Copy, Clone)]
+struct DriverPtr(*mut Driver);
+
+// SAFETY: The Driver allocation lives for the duration of any active streams and
+// all access is synchronized manually inside the audio callbacks.
+unsafe impl Send for DriverPtr {}
+unsafe impl Sync for DriverPtr {}
+
 unsafe extern "C" fn get_caps(_selfp:*mut sys::oa_driver)->u32 {
     (sys::OA_CAP_OUTPUT | sys::OA_CAP_INPUT | sys::OA_CAP_FULL_DUPLEX) as u32
 }
@@ -107,10 +115,10 @@ unsafe extern "C" fn start(selfp:*mut sys::oa_driver, cfg:*const sys::oa_stream_
                 sc.channels = in_ch;
                 sc.sample_rate = cpal::SampleRate((*cfg).sample_rate);
                 sc.buffer_size = cpal::BufferSize::Default;
-                let state_ptr = selfp as *mut Driver;
+                let state_ptr = DriverPtr(selfp as *mut Driver);
                 let istream = id.build_input_stream(&sc,
                     move |data:&[f32], _| {
-                        let st = unsafe{ &mut *state_ptr };
+                        let st = unsafe{ &mut *state_ptr.0 };
                         // store latest
                         let frames = data.len() / (st.state.cfg.in_channels as usize).max(1);
                         let len = frames * (st.state.cfg.in_channels as usize).max(1);
@@ -133,11 +141,11 @@ unsafe extern "C" fn start(selfp:*mut sys::oa_driver, cfg:*const sys::oa_stream_
     sc.channels = (*cfg).out_channels;
     sc.sample_rate = cpal::SampleRate((*cfg).sample_rate);
     sc.buffer_size = cpal::BufferSize::Default;
-    let state_ptr = selfp as *mut Driver;
+    let state_ptr = DriverPtr(selfp as *mut Driver);
 
     let ostream = out_dev.build_output_stream(&sc,
         move |data:&mut [f32], _| {
-            let st = unsafe{ &mut *state_ptr };
+            let st = unsafe{ &mut *state_ptr.0 };
             let frames = (data.len() / (st.state.cfg.out_channels as usize).max(1)) as u32;
 
             // Prepare input pointers based on layout
