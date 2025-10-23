@@ -3,7 +3,7 @@
 use alsa::pcm::{Access, Format, HwParams, PCM};
 use alsa::{Direction as PcmDir, ValueOr};
 use openasio_sys as sys;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::{ffi::CStr, os::raw::c_void, ptr, time::Instant};
 
 const CAP_OUTPUT: u32 = 1 << 0;
@@ -29,12 +29,29 @@ struct DriverState {
     overruns: AtomicU32,
     in_buf: Vec<f32>,  // interleaved
     out_buf: Vec<f32>, // interleaved
+    running: AtomicBool,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 #[repr(C)]
 struct Driver {
     vt: sys::oa_driver_vtable,
     state: DriverState,
+}
+
+impl DriverState {
+    fn stop_worker(&mut self) {
+        self.running.store(false, Ordering::Release);
+        if let Some(handle) = self.worker.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for DriverState {
+    fn drop(&mut self) {
+        self.stop_worker();
+    }
 }
 
 unsafe extern "C" fn get_caps(_: *mut sys::oa_driver) -> u32 {
@@ -67,6 +84,7 @@ unsafe extern "C" fn open_device(selfp: *mut sys::oa_driver, name: *const i8) ->
 
 unsafe extern "C" fn close_device(selfp: *mut sys::oa_driver) -> i32 {
     let s = &mut *(selfp as *mut Driver);
+    s.state.stop_worker();
     s.state.io.cap = None;
     s.state.io.pb = None;
     sys::OA_OK
@@ -97,6 +115,90 @@ fn hw_setup(pcm: &PCM, dir: PcmDir, cfg: &sys::oa_stream_config) -> Result<(), S
     Ok(())
 }
 
+unsafe fn driver_thread(selfp: *mut Driver) {
+    loop {
+        let driver = &mut *selfp;
+        if !driver.state.running.load(Ordering::Acquire) {
+            break;
+        }
+
+        let frames = driver.state.cfg.buffer_frames as usize;
+        let ich = driver.state.cfg.in_channels as usize;
+        let och = driver.state.cfg.out_channels as usize;
+        let interleaved = matches!(
+            driver.state.cfg.layout,
+            sys::oa_buffer_layout::OA_BUF_INTERLEAVED
+        );
+
+        if let Some(cap) = driver.state.io.cap.as_ref() {
+            let res = cap
+                .io_f32()
+                .and_then(|io| io.readi(&mut driver.state.in_buf[..frames * ich]));
+            if let Err(e) = res {
+                if e.errno() == Some(nix::errno::Errno::EPIPE) {
+                    let _ = cap.prepare();
+                    driver.state.underruns.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let ti = sys::oa_time_info {
+            host_time_ns: driver.state.time0.elapsed().as_nanos() as u64,
+            device_time_ns: 0,
+            underruns: driver.state.underruns.load(Ordering::Relaxed),
+            overruns: driver.state.overruns.load(Ordering::Relaxed),
+        };
+        if !driver.state.host.is_null() {
+            let host = &*driver.state.host;
+            if let Some(cb) = host.process {
+                let in_ptr: *const c_void;
+                let out_ptr: *mut c_void;
+                if interleaved {
+                    in_ptr = if ich > 0 {
+                        driver.state.in_buf.as_ptr() as *const c_void
+                    } else {
+                        ptr::null()
+                    };
+                    out_ptr = driver.state.out_buf.as_mut_ptr() as *mut c_void;
+                } else {
+                    let mut in_planes: Vec<*const f32> = (0..ich)
+                        .map(|c| driver.state.in_buf.as_ptr().wrapping_add(c))
+                        .collect();
+                    let mut out_planes: Vec<*mut f32> = (0..och)
+                        .map(|c| driver.state.out_buf.as_mut_ptr().wrapping_add(c))
+                        .collect();
+                    in_ptr = if ich > 0 {
+                        in_planes.as_ptr() as *const c_void
+                    } else {
+                        ptr::null()
+                    };
+                    out_ptr = out_planes.as_mut_ptr() as *mut c_void;
+                }
+                cb(
+                    driver.state.host_user,
+                    in_ptr,
+                    out_ptr,
+                    frames as u32,
+                    &ti as *const _,
+                    &driver.state.cfg as *const _,
+                );
+            }
+        }
+
+        if let Some(pb) = driver.state.io.pb.as_ref() {
+            let res = pb
+                .io_f32()
+                .and_then(|io| io.writei(&driver.state.out_buf[..frames * och]));
+            if let Err(e) = res {
+                if e.errno() == Some(nix::errno::Errno::EPIPE) {
+                    let _ = pb.prepare();
+                    driver.state.underruns.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+}
+
 unsafe extern "C" fn get_default_config(
     selfp: *mut sys::oa_driver,
     out: *mut sys::oa_stream_config,
@@ -117,7 +219,13 @@ unsafe extern "C" fn start(selfp: *mut sys::oa_driver, cfg: *const sys::oa_strea
     }
     let cfg = &*cfg;
     let s = &mut *(selfp as *mut Driver);
+    s.state.stop_worker();
+    s.state.io.pb = None;
+    s.state.io.cap = None;
     s.state.cfg = *cfg;
+    s.state.time0 = Instant::now();
+    s.state.underruns.store(0, Ordering::Relaxed);
+    s.state.overruns.store(0, Ordering::Relaxed);
     let name = s
         .state
         .dev_name
@@ -153,98 +261,18 @@ unsafe extern "C" fn start(selfp: *mut sys::oa_driver, cfg: *const sys::oa_strea
     s.state.out_buf.resize(frames * och, 0.0);
     s.state.io.pb = Some(pb);
     s.state.io.cap = cap;
-
-    std::thread::spawn(move || {
-        let st = &mut *(selfp as *mut Driver);
-        let frames = st.state.cfg.buffer_frames as usize;
-        let ich = st.state.cfg.in_channels as usize;
-        let och = st.state.cfg.out_channels as usize;
-        let interleaved = matches!(
-            st.state.cfg.layout,
-            sys::oa_buffer_layout::OA_BUF_INTERLEAVED
-        );
-
-        loop {
-            // Capture first (if any)
-            if let Some(ref cap) = st.state.io.cap {
-                let res = cap
-                    .io_f32()
-                    .and_then(|io| io.readi(&mut st.state.in_buf[..frames * ich]));
-                if let Err(e) = res {
-                    if e.errno() == Some(nix::errno::Errno::EPIPE) {
-                        let _ = cap.prepare();
-                        st.state.underruns.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-
-            // Call host
-            let ti = sys::oa_time_info {
-                host_time_ns: st.state.time0.elapsed().as_nanos() as u64,
-                device_time_ns: 0,
-                underruns: st.state.underruns.load(Ordering::Relaxed),
-                overruns: st.state.overruns.load(Ordering::Relaxed),
-            };
-            if !st.state.host.is_null() {
-                let host = unsafe { &*st.state.host };
-                if let Some(cb) = host.process {
-                    let in_ptr: *const c_void;
-                    let out_ptr: *mut c_void;
-                    if interleaved {
-                        in_ptr = if ich > 0 {
-                            st.state.in_buf.as_ptr() as *const c_void
-                        } else {
-                            ptr::null()
-                        };
-                        out_ptr = st.state.out_buf.as_mut_ptr() as *mut c_void;
-                    } else {
-                        // Non-interleaved staging (planes point into interleaved buffers with stride)
-                        let mut in_planes: Vec<*const f32> = (0..ich)
-                            .map(|c| unsafe { st.state.in_buf.as_ptr().add(c) })
-                            .collect();
-                        let mut out_planes: Vec<*mut f32> = (0..och)
-                            .map(|c| unsafe { st.state.out_buf.as_mut_ptr().add(c) })
-                            .collect();
-                        in_ptr = if ich > 0 {
-                            in_planes.as_ptr() as *const c_void
-                        } else {
-                            ptr::null()
-                        };
-                        out_ptr = out_planes.as_mut_ptr() as *mut c_void;
-                    }
-                    unsafe {
-                        cb(
-                            st.state.host_user,
-                            in_ptr,
-                            out_ptr,
-                            frames as u32,
-                            &ti as *const _,
-                            &st.state.cfg as *const _,
-                        )
-                    };
-                }
-            }
-
-            // Playback
-            if let Some(ref pb) = st.state.io.pb {
-                let res = pb
-                    .io_f32()
-                    .and_then(|io| io.writei(&st.state.out_buf[..frames * och]));
-                if let Err(e) = res {
-                    if e.errno() == Some(nix::errno::Errno::EPIPE) {
-                        let _ = pb.prepare();
-                        st.state.underruns.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-        }
-    });
+    s.state.running.store(true, Ordering::Release);
+    let driver_ptr = selfp as *mut Driver;
+    s.state.worker = Some(std::thread::spawn(move || unsafe {
+        driver_thread(driver_ptr);
+    }));
 
     sys::OA_OK
 }
 
 unsafe extern "C" fn stop(selfp: *mut sys::oa_driver) -> i32 {
     let s = &mut *(selfp as *mut Driver);
+    s.state.stop_worker();
     s.state.io.pb = None;
     s.state.io.cap = None;
     sys::OA_OK
@@ -317,6 +345,8 @@ pub unsafe extern "C" fn openasio_driver_create(
             overruns: AtomicU32::new(0),
             in_buf: Vec::new(),
             out_buf: Vec::new(),
+            running: AtomicBool::new(false),
+            worker: None,
         },
     });
     *out = Box::into_raw(drv) as *mut sys::oa_driver;
