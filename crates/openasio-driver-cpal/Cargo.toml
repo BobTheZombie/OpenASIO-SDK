@@ -1,0 +1,14 @@
+[package]
+name = "openasio-driver-cpal"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "OpenASIO driver implemented over CPAL (Linux/ALSA/JACK)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+openasio-sys = { path = "../openasio-sys" }
+cpal = { version = "0.15", default-features = true, features = ["jack"] }
+libc = "0.2"

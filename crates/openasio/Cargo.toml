@@ -1,0 +1,11 @@
+[package]
+name = "openasio"
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Safe host-side wrapper for OpenASIO drivers"
+
+[dependencies]
+openasio-sys = { path = "../openasio-sys" }
+thiserror = "1.0"
+anyhow = "1.0"

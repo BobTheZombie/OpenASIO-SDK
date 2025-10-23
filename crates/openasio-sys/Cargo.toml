@@ -1,0 +1,13 @@
+[package]
+name = "openasio-sys"
+version = "0.2.0"
+edition = "2021"
+links = "openasio"
+license = "MIT OR Apache-2.0"
+description = "Raw FFI for the OpenASIO ABI"
+
+[build-dependencies]
+cc = "1.1"
+
+[dependencies]
+libloading = "0.8"

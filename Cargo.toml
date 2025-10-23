@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "crates/openasio-sys",
+    "crates/openasio",
+    "crates/openasio-driver-cpal",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"

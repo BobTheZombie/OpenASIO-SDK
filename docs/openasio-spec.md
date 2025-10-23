@@ -1,47 +1,52 @@
-# OpenASIO – Open, ASIO-like driver ABI (Draft v0.1.0)
+# OpenASIO – Open, ASIO-like driver ABI (Draft v0.2.0)
 
-**Status:** draft v0.1.0 (experimental)  
+**Status:** draft v0.2.0  
 **License:** MIT OR Apache-2.0
 
-OpenASIO is a tiny, permissively licensed **C99 ABI** that separates a DAW **host** from a low-latency **driver**. Drivers own the audio thread and _pull_ the host’s callback each period, mirroring the control direction popularized by ASIO. This project is **not** affiliated with Steinberg ASIO®; it’s an independent, open alternative with similar goals.
+OpenASIO is a tiny **C99 ABI** that separates a DAW **host** from a low-latency **driver**. Drivers own the audio thread and *pull* the host’s audio via a `process()` callback every period.
 
-## Design Goals
-- **Stable C ABI:** single header `openasio.h`, fixed struct sizes/versioning.
-- **RT-safety:** In `process()`, hosts/drivers avoid heap allocations, locks, syscalls and logging; denormals should be flushed by the host.
-- **Buffer model:** One `process()` per period; interleaved or non-interleaved, format negotiated at `start()`.
-- **Timing:** `oa_time_info` provides a host monotonic timestamp and optional device time.
-- **Discovery:** Hosts `dlopen` driver .so/.dylib/.dll and resolve two symbols:
-  - `openasio_driver_create(const oa_create_params*, oa_driver**)`
-  - `openasio_driver_destroy(oa_driver*)`
+> Not affiliated with Steinberg ASIO®.
+
+## What’s new in v0.2.0
+- **Buffer layout enum** (`oa_buffer_layout`) with explicit **interleaved** and **non-interleaved**.
+- **Capabilities bits** (`oa_caps`): discover OUTPUT/INPUT/FULL_DUPLEX and reconfig support.
+- Clarified **threading**, **error semantics**, and **lifecycle**.
+- Extended header comments and normative language.
 
 ## Lifecycle
-1. Host loads driver shared library.
-2. Host fills `oa_host_callbacks` and `oa_create_params` and calls `openasio_driver_create`.
-3. Host calls `driver->vt->open_device(driver, NULL)` (or by name).
-4. Host negotiates config via `get_default_config()` and adjusts fields if needed.
-5. Host starts streaming with `start(&cfg)`; driver begins invoking `host.process(...)` on its RT thread.
-6. Host stops with `stop()`, then destroys with `openasio_driver_destroy()`.
+1. Host loads driver shared library and resolves:
+   - `openasio_driver_create(const oa_create_params*, oa_driver**)`
+   - `openasio_driver_destroy(oa_driver*)`
+2. Host fills `oa_host_callbacks` (must be RT-safe) and calls `create`.
+3. Host opens a device (optional name substring) with `open_device`.
+4. Host retrieves config with `get_default_config`, adjusts (layout, channels, sample rate, buffer frames).
+5. Host starts streaming with `start(&cfg)` — driver begins invoking `host.process(...)` on its RT thread.
+6. Host may stop with `stop()`, then `close_device()` and destroy the driver.
 
-## Threading Model
-- The **driver** owns the RT thread and invokes `host.process` for each period.
-- The **host** may call control functions (e.g. `stop`, `set_sample_rate`) from a non-RT thread; drivers must document which calls are safe while running.
+## RT-Safety Rules (Normative)
+- In `host.process`: **no allocations, locks, syscalls, or logging**. Use preallocated buffers and lock-free queues.
+- Drivers must not block in the audio thread. Time-critical code only.
+- Hosts should flush denormals (FTZ/DAZ) before processing.
+
+## Buffering & Layout
+- Interleaved: `out` is a single contiguous buffer, length = `frames * out_channels` samples.
+- Non-interleaved: `out` is an array of `out_channels` pointers, each to `frames` samples.
+- Sample format is negotiated at `start()`; float32 is strongly RECOMMENDED.
+
+## Timing
+- `oa_time_info` contains `host_time_ns` (monotonic) and an optional `device_time_ns`.
+- Drivers should increment underrun/overrun counters; reset between callbacks is driver-defined.
+
+## Capabilities
+- `get_caps()` returns OR-combination of `oa_caps` flags. Hosts adapt to OUTPUT-only drivers, etc.
+
+## Versioning
+- Header declares `OA_VERSION_MAJOR.MINOR.PATCH`. MINOR/PATCH are additive.
+- Breaking ABI bumps **MAJOR**.
 
 ## Error Handling
-All driver methods return `oa_result` (0 = `OA_OK`, negative = error). If `host.process` returns `OA_FALSE`, the driver should stop gracefully soon after.
+- Methods return `oa_result`. `OA_OK (0)` success; negative values are errors.
+- If `host.process` returns `OA_FALSE`, the driver **should** stop soon.
 
-## ABI Details
-See the header for exact types and enums. Key types:
-- `oa_stream_config`: sample rate, buffer size (frames), channel counts, format, layout.
-- `oa_time_info`: timing and XRuns.
-- `oa_driver_vtable`: function table the driver implements.
-
-## Versioning Policy
-- Semver-like triplet in the header. Minor/patch releases are strictly additive.
-- Breaking ABI changes will bump **MAJOR**.
-
-## Licensing
-- Header/spec: **MIT OR Apache-2.0**.
-- Example drivers may include additional licenses per backend.
-
-## Notes
-- This spec intentionally avoids policy-heavy features (device topology, MIDI, clock domains). These can be layered on via extensions in future versions.
+## Extensions
+- v0.2 keeps the core tight. Extensions are negotiated by driver-specific means (e.g. extra symbols). Future versions may add a key/value query.
