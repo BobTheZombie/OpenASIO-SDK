@@ -543,6 +543,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "openasio-driver-umc202hd"
+version = "1.0.0"
+dependencies = [
+ "alsa",
+ "libc",
+ "nix",
+ "openasio-sys",
+]
+
+[[package]]
 name = "openasio-sys"
 version = "1.0.0"
 dependencies = [
