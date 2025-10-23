@@ -135,7 +135,7 @@ unsafe fn driver_thread(selfp: *mut Driver) {
                 .io_f32()
                 .and_then(|io| io.readi(&mut driver.state.in_buf[..frames * ich]));
             if let Err(e) = res {
-                if e.errno() == Some(nix::errno::Errno::EPIPE) {
+                if e.errno() == nix::errno::Errno::EPIPE as i32 {
                     let _ = cap.prepare();
                     driver.state.underruns.fetch_add(1, Ordering::Relaxed);
                 }
@@ -190,7 +190,7 @@ unsafe fn driver_thread(selfp: *mut Driver) {
                 .io_f32()
                 .and_then(|io| io.writei(&driver.state.out_buf[..frames * och]));
             if let Err(e) = res {
-                if e.errno() == Some(nix::errno::Errno::EPIPE) {
+                if e.errno() == nix::errno::Errno::EPIPE as i32 {
                     let _ = pb.prepare();
                     driver.state.underruns.fetch_add(1, Ordering::Relaxed);
                 }
@@ -200,10 +200,9 @@ unsafe fn driver_thread(selfp: *mut Driver) {
 }
 
 unsafe extern "C" fn get_default_config(
-    selfp: *mut sys::oa_driver,
+    _selfp: *mut sys::oa_driver,
     out: *mut sys::oa_stream_config,
 ) -> i32 {
-    let s = &mut *(selfp as *mut Driver);
     (*out).sample_rate = 48000;
     (*out).buffer_frames = 128;
     (*out).in_channels = 2;
@@ -262,9 +261,9 @@ unsafe extern "C" fn start(selfp: *mut sys::oa_driver, cfg: *const sys::oa_strea
     s.state.io.pb = Some(pb);
     s.state.io.cap = cap;
     s.state.running.store(true, Ordering::Release);
-    let driver_ptr = selfp as *mut Driver;
+    let driver_ptr = selfp as *mut Driver as usize;
     s.state.worker = Some(std::thread::spawn(move || unsafe {
-        driver_thread(driver_ptr);
+        driver_thread(driver_ptr as *mut Driver);
     }));
 
     sys::OA_OK
