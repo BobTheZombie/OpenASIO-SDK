@@ -19,6 +19,12 @@ pub const OA_ERR_DEVICE: oa_result = -4;
 pub const OA_ERR_BACKEND: oa_result = -5;
 pub const OA_ERR_STATE: oa_result = -6;
 
+pub const OA_CAP_OUTPUT: u32 = 1<<0;
+pub const OA_CAP_INPUT: u32 = 1<<1;
+pub const OA_CAP_FULL_DUPLEX: u32 = 1<<2;
+pub const OA_CAP_SET_SAMPLERATE: u32 = 1<<3;
+pub const OA_CAP_SET_BUFFRAMES: u32 = 1<<4;
+
 #[repr(C)] #[derive(Clone, Copy, Debug)]
 pub enum oa_sample_format { OA_SAMPLE_F32 = 1, OA_SAMPLE_I16 = 2 }
 
@@ -40,7 +46,7 @@ pub struct oa_time_info {
     pub host_time_ns: u64, pub device_time_ns: u64, pub underruns: u32, pub overruns: u32,
 }
 
-#[repr(C)]
+#[repr(C)] #[derive(Clone, Copy)]
 pub struct oa_host_callbacks {
     pub process: Option<unsafe extern "C" fn(user:*mut c_void,in_ptr:*const c_void,out_ptr:*mut c_void,frames:u32,time:*const oa_time_info,cfg:*const oa_stream_config)->oa_bool>,
     pub latency_changed: Option<unsafe extern "C" fn(user:*mut c_void,in_latency:u32,out_latency:u32)>,

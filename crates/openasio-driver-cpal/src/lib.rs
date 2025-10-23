@@ -3,8 +3,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use openasio_sys as sys;
 use std::ffi::CStr;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, atomic::AtomicUsize};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 struct DriverState {
@@ -152,7 +151,7 @@ unsafe extern "C" fn start(selfp:*mut sys::oa_driver, cfg:*const sys::oa_stream_
                 } else {
                     let ch = st.state.cfg.in_channels as usize;
                     in_planes.resize(ch, std::ptr::null());
-                    for c in range(0, ch) {
+                    for c in 0..ch {
                         // deinterleave view: plane c points to first sample of that channel
                         // We'll assume host reads strided by ch; for strict non-interleaved we'd keep true planes.
                         in_planes[c] = unsafe { st.state.in_buf.as_ptr().add(c) };
